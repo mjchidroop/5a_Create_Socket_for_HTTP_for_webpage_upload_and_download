@@ -17,149 +17,283 @@ To write a PYTHON program for socket for HTTP for web page upload and download
 ```python
 import socket
 import os
+import time
 
 HOST = "127.0.0.1"
 PORT = 8080
+BUFFER_SIZE = 4096
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
 server.bind((HOST, PORT))
 server.listen(5)
 
-print("HTTP Server Started")
-print(f"Server running at http://{HOST}:{PORT}")
+print("=" * 60)
+print("            HTTP SOCKET SERVER")
+print("=" * 60)
+print(f"Host         : {HOST}")
+print(f"Port         : {PORT}")
+print(f"Buffer Size  : {BUFFER_SIZE} bytes")
+print(f"URL          : http://{HOST}:{PORT}")
+print("=" * 60)
 
 while True:
 
-    connection, address = server.accept()
+    conn, addr = server.accept()
 
-    request = connection.recv(8192)
+    print("\n" + "-" * 60)
+    print(f"Client Connected : {addr[0]}:{addr[1]}")
+
+    start_time = time.time()
+
+    # Receive HTTP header
+    request = b""
+
+    while b"\r\n\r\n" not in request:
+        data = conn.recv(BUFFER_SIZE)
+
+        if not data:
+            break
+
+        request += data
 
     if not request:
-        connection.close()
+        conn.close()
         continue
 
-    request_text = request.decode(errors="ignore")
+    header, separator, body = request.partition(b"\r\n\r\n")
+    header_text = header.decode(errors="ignore")
 
-    print("\nClient Connected:", address)
-    print("Request:", request_text.splitlines()[0])
+    first_line = header_text.splitlines()[0]
 
-    # GET request
-    if request_text.startswith("GET"):
+    print(f"HTTP Request     : {first_line}")
+
+    # ==========================================================
+    # GET REQUEST - DOWNLOAD
+    # ==========================================================
+
+    if first_line.startswith("GET"):
 
         filename = "example.html"
 
+        print("Operation         : DOWNLOAD")
+
         if os.path.exists(filename):
+
+            file_size = os.path.getsize(filename)
+
+            print(f"File              : {filename}")
+            print(f"File Size         : {file_size} bytes")
 
             with open(filename, "rb") as file:
                 content = file.read()
 
-            response = (
-                b"HTTP/1.1 200 OK\r\n"
-                b"Content-Type: text/html\r\n"
-                + f"Content-Length: {len(content)}\r\n".encode()
-                + b"Connection: close\r\n"
-                + b"\r\n"
-                + content
-            )
+            response_header = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/html\r\n"
+                f"Content-Length: {len(content)}\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+            ).encode()
 
-            print("ACK: Webpage sent")
+            conn.sendall(response_header)
+
+            # Send webpage in chunks
+            bytes_sent = 0
+
+            for i in range(0, len(content), BUFFER_SIZE):
+
+                chunk = content[i:i + BUFFER_SIZE]
+
+                conn.sendall(chunk)
+
+                bytes_sent += len(chunk)
+
+                print(
+                    f"\rBytes Sent       : {bytes_sent}/{file_size} bytes",
+                    end=""
+                )
+
+            elapsed = time.time() - start_time
+
+            speed = bytes_sent / elapsed if elapsed > 0 else 0
+
+            print("\n")
+            print(f"ACK               : Download successful")
+            print(f"Total Bytes Sent  : {bytes_sent} bytes")
+            print(f"Transfer Time     : {elapsed:.4f} seconds")
+            print(f"Transfer Speed    : {speed:.2f} bytes/sec")
 
         else:
 
             response = (
-                b"HTTP/1.1 404 Not Found\r\n"
-                b"Connection: close\r\n"
-                b"\r\n"
-                b"NACK: File not found"
-            )
+                "HTTP/1.1 404 Not Found\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "NACK: File not found"
+            ).encode()
 
-            print("NACK: File not found")
+            conn.sendall(response)
 
-        connection.sendall(response)
+            print("NACK              : File not found")
 
-    # POST request
-    elif request_text.startswith("POST"):
+    # ==========================================================
+    # POST REQUEST - UPLOAD
+    # ==========================================================
 
-        header, separator, body = request.partition(b"\r\n\r\n")
+    elif first_line.startswith("POST"):
 
-        header_text = header.decode(errors="ignore")
+        print("Operation         : UPLOAD")
 
         content_length = 0
 
         for line in header_text.splitlines():
 
             if line.lower().startswith("content-length:"):
-                content_length = int(line.split(":")[1].strip())
 
-        while len(body) < content_length:
+                content_length = int(
+                    line.split(":", 1)[1].strip()
+                )
 
-            body += connection.recv(4096)
+        print(f"Expected Bytes    : {content_length} bytes")
 
-        with open("uploaded.html", "wb") as file:
-            file.write(body[:content_length])
+        received_data = body
 
-        response = (
-            b"HTTP/1.1 200 OK\r\n"
-            b"Content-Type: text/plain\r\n"
-            b"Connection: close\r\n"
-            b"\r\n"
-            b"ACK: Upload successful"
-        )
+        bytes_received = len(received_data)
 
-        print("ACK: Webpage uploaded")
+        print(f"Initial Bytes     : {bytes_received} bytes")
 
-        connection.sendall(response)
+        # Continue receiving until complete file is received
+        while bytes_received < content_length:
+
+            chunk = conn.recv(BUFFER_SIZE)
+
+            if not chunk:
+                break
+
+            received_data += chunk
+
+            bytes_received += len(chunk)
+
+            print(
+                f"\rBytes Received   : "
+                f"{bytes_received}/{content_length} bytes",
+                end=""
+            )
+
+        print()
+
+        if bytes_received == content_length:
+
+            with open("uploaded.html", "wb") as file:
+                file.write(received_data)
+
+            elapsed = time.time() - start_time
+
+            speed = (
+                bytes_received / elapsed
+                if elapsed > 0
+                else 0
+            )
+
+            response = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "ACK: Upload successful"
+            ).encode()
+
+            conn.sendall(response)
+
+            print("Saved File        : uploaded.html")
+            print(f"ACK               : Upload successful")
+            print(f"Total Bytes Recv. : {bytes_received} bytes")
+            print(f"Transfer Time     : {elapsed:.4f} seconds")
+            print(f"Transfer Speed    : {speed:.2f} bytes/sec")
+
+        else:
+
+            response = (
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "NACK: Incomplete data"
+            ).encode()
+
+            conn.sendall(response)
+
+            print("NACK              : Incomplete data")
+
+    # ==========================================================
+    # INVALID REQUEST
+    # ==========================================================
 
     else:
 
         response = (
-            b"HTTP/1.1 400 Bad Request\r\n"
-            b"Connection: close\r\n"
-            b"\r\n"
-            b"NACK: Invalid request"
-        )
+            "HTTP/1.1 400 Bad Request\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "NACK: Invalid HTTP request"
+        ).encode()
 
-        connection.sendall(response)
+        conn.sendall(response)
 
-    connection.close()
+        print("NACK              : Invalid HTTP request")
+
+    conn.close()
+
+    print("-" * 60)
 ```
 
 > client.py
 ```python
 import socket
 import os
+import time
 import webbrowser
 
 HOST = "127.0.0.1"
 PORT = 8080
+BUFFER_SIZE = 4096
 
 
 def send_request(request):
 
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM
+    )
 
     client.connect((HOST, PORT))
+
+    start_time = time.time()
+
     client.sendall(request)
 
     response = b""
 
     while True:
 
-        data = client.recv(4096)
+        data = client.recv(BUFFER_SIZE)
 
         if not data:
             break
 
         response += data
 
+    elapsed = time.time() - start_time
+
     client.close()
 
-    return response
+    return response, elapsed
 
 
-# Create sample webpage
+# ==========================================================
+# CREATE SAMPLE WEBPAGE
+# ==========================================================
+
 if not os.path.exists("example.html"):
 
     html = """
@@ -168,9 +302,20 @@ if not os.path.exists("example.html"):
 <head>
     <title>HTTP Socket Demo</title>
 </head>
+
 <body>
+
     <h1>HTTP Socket Programming</h1>
-    <p>This webpage was transferred using Python sockets.</p>
+
+    <p>
+        This webpage was transferred using
+        Python TCP socket programming.
+    </p>
+
+    <p>
+        HTTP GET and POST methods are used.
+    </p>
+
 </body>
 </html>
 """
@@ -179,53 +324,107 @@ if not os.path.exists("example.html"):
         file.write(html)
 
 
-print("================================")
-print(" HTTP SOCKET CLIENT")
-print("================================")
+# ==========================================================
+# MAIN MENU
+# ==========================================================
+
+print("=" * 60)
+print("             HTTP SOCKET CLIENT")
+print("=" * 60)
+
 print("1. Upload Webpage")
 print("2. Download Webpage")
+print("=" * 60)
 
-choice = input("\nEnter your choice: ")
+choice = input("Enter your choice: ")
 
 
-# ---------------- UPLOAD ----------------
+# ==========================================================
+# UPLOAD
+# ==========================================================
 
 if choice == "1":
 
-    with open("example.html", "rb") as file:
-        content = file.read()
+    filename = "example.html"
 
-    request = (
+    with open(filename, "rb") as file:
+        file_data = file.read()
+
+    file_size = len(file_data)
+
+    print("\n" + "-" * 60)
+    print("UPLOAD INFORMATION")
+    print("-" * 60)
+
+    print(f"File Name         : {filename}")
+    print(f"File Size         : {file_size} bytes")
+    print(f"Buffer Size       : {BUFFER_SIZE} bytes")
+
+    request_header = (
         f"POST /upload HTTP/1.1\r\n"
         f"Host: {HOST}:{PORT}\r\n"
         f"Content-Type: text/html\r\n"
-        f"Content-Length: {len(content)}\r\n"
+        f"Content-Length: {file_size}\r\n"
         f"Connection: close\r\n"
         f"\r\n"
-    ).encode() + content
+    ).encode()
 
-    response = send_request(request)
+    request = request_header + file_data
 
-    print("\n----- UPLOAD RESULT -----")
+    print(f"HTTP Header       : {len(request_header)} bytes")
+    print(f"Total Request     : {len(request)} bytes")
+
+    response, elapsed = send_request(request)
+
+    print("\n" + "-" * 60)
+    print("SERVER RESPONSE")
+    print("-" * 60)
+
     print(response.decode(errors="ignore"))
 
+    speed = (
+        file_size / elapsed
+        if elapsed > 0
+        else 0
+    )
 
-# ---------------- DOWNLOAD ----------------
+    print(f"Upload Time       : {elapsed:.4f} seconds")
+    print(f"Upload Speed      : {speed:.2f} bytes/sec")
+
+
+# ==========================================================
+# DOWNLOAD
+# ==========================================================
 
 elif choice == "2":
 
+    filename = "example.html"
+
     request = (
-        f"GET /example.html HTTP/1.1\r\n"
+        f"GET /{filename} HTTP/1.1\r\n"
         f"Host: {HOST}:{PORT}\r\n"
         f"Connection: close\r\n"
         f"\r\n"
     ).encode()
 
-    response = send_request(request)
+    print("\n" + "-" * 60)
+    print("DOWNLOAD INFORMATION")
+    print("-" * 60)
 
-    header, separator, content = response.partition(b"\r\n\r\n")
+    print(f"Requested File    : {filename}")
+    print(f"Request Size      : {len(request)} bytes")
+    print(f"Buffer Size       : {BUFFER_SIZE} bytes")
 
-    print("\n----- DOWNLOAD RESULT -----")
+    response, elapsed = send_request(request)
+
+    header, separator, content = response.partition(
+        b"\r\n\r\n"
+    )
+
+    print("\n" + "-" * 60)
+    print("HTTP RESPONSE")
+    print("-" * 60)
+
     print(header.decode(errors="ignore"))
 
     if b"200 OK" in header:
@@ -233,29 +432,47 @@ elif choice == "2":
         with open("downloaded.html", "wb") as file:
             file.write(content)
 
-        print("ACK: Webpage downloaded successfully")
+        downloaded_size = len(content)
+
+        speed = (
+            downloaded_size / elapsed
+            if elapsed > 0
+            else 0
+        )
+
+        print("\n" + "-" * 60)
+        print("DOWNLOAD RESULT")
+        print("-" * 60)
+
+        print("ACK               : Download successful")
+        print(f"Bytes Received    : {downloaded_size} bytes")
+        print(f"Transfer Time     : {elapsed:.4f} seconds")
+        print(f"Transfer Speed    : {speed:.2f} bytes/sec")
+        print("Saved File        : downloaded.html")
 
         path = os.path.abspath("downloaded.html")
 
-        webbrowser.open("file://" + path)
+        webbrowser.open(
+            "file://" + path
+        )
 
-        print("Webpage opened in browser.")
+        print("Browser            : Webpage opened")
 
     else:
 
-        print("NACK: Download failed")
+        print("NACK               : Download failed")
 
 
 else:
 
-    print("Invalid choice")
+    print("Invalid choice.")
 ```
 ## OUTPUT 
 > terminal output:
-<img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/ea4484b2-75b5-4f4c-bfc3-0e0f5224c15d" />
+<img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/4765b927-8176-426b-b4d2-a7121a81bcd6" />
 
 > downloaded.html
-<img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/32d8f16b-9c7f-40d1-8ff8-2ad08f1ae492" />
+<img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/f2a31a3e-23a4-41e7-9cd9-f2589d076df2" />
 
 ## Result
 Thus the socket for HTTP for web page upload and download created and Executed
