@@ -259,7 +259,7 @@ else:
 > terminal output:
 <img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/ea4484b2-75b5-4f4c-bfc3-0e0f5224c15d" />
 
-> down
+> downloaded.html
 <img width="1917" height="1078" alt="image" src="https://github.com/user-attachments/assets/32d8f16b-9c7f-40d1-8ff8-2ad08f1ae492" />
 
 ## Result
